@@ -1,10 +1,11 @@
 import enum
 import threading
+import time
 from dataclasses import field
-from queue import PriorityQueue
+from queue import Queue, PriorityQueue
 
 from attr import dataclass
-from nti_acs.srv import BridgeSend, BridgeSubscribeTopic, BridgeRequestImage, BridgeStats
+from nti_acs.srv import BridgeSend, BridgeRequestImage
 from reedsolo import RSCodec, ReedSolomonError
 from serial import Serial
 
@@ -12,7 +13,7 @@ import rospy
 import utils
 
 '''
-Message description:
+Message description (full):
 
 Base:
 0-1: START_BYTES
@@ -22,19 +23,21 @@ Base:
 [5;5+n]: DATA len=n
 [6+n; 6+n+m]: REED-SOLOMON CODE len=m
 7+n+m: END_BYTE
+
+Short:
+0: Opcode
+
+
 '''
 
 
 class Opcodes(enum.IntEnum):
     INTERNAL = 0x00
-    SUB_TOPIC = 0x01
-    USUB_TOPIC = 0x02
-    CAM_REQ = 0x04
-    CAM_START = 0x05
-    CAM_DATA = 0x06
-    CAM_STOP = 0x07
-    RESEND = 0x08
-    ROS_TOPIC = 0x0A
+    C_CAM_REQ = 0x01  # [cam id, None]
+    R_CAM_START = 0x05
+    R_CAM_DATA = 0x06
+    R_CAM_STOP = 0x07
+    MIN_USER_OPCODE = 0xA0
 
 
 @dataclass(order=True)
@@ -56,7 +59,10 @@ class SerialProxy:
     _resend_req_mode = False
     _pass_first_header = False
 
-    _output_packet_queue = PriorityQueue()
+    # _output_packet_queue = PriorityQueue()
+    _output_packet_queue = Queue()
+
+    _exec_queue = Queue()
 
     nonce = 0
 
@@ -64,6 +70,8 @@ class SerialProxy:
     _img_ext = None
 
     _run = True
+
+    _msg_stack = bytearray()
 
     def __init__(self,
                  port_name, baud, rsc_n=12,
@@ -90,14 +98,10 @@ class SerialProxy:
         self.topic_postfix = topic_postfix
 
         self.handlers = {
-            Opcodes.SUB_TOPIC: self._subscribe_request,
-            Opcodes.USUB_TOPIC: self._unsubscribe_request,
-            Opcodes.CAM_REQ: self._send_image_from_cam,
-            Opcodes.CAM_START: self._start_cam_data,
-            Opcodes.CAM_STOP: self._stop_cam_data,
-            Opcodes.CAM_DATA: self._add_cam_data,
-            Opcodes.ROS_TOPIC: self._topic_update,
-            Opcodes.RESEND: self._resend_msg
+            Opcodes.C_CAM_REQ: self._send_image_from_cam,
+            Opcodes.R_CAM_START: self._start_cam_data,
+            Opcodes.R_CAM_STOP: self._stop_cam_data,
+            Opcodes.R_CAM_DATA: self._add_cam_data,
         }
 
         self.subscribers = {}
@@ -112,91 +116,25 @@ class SerialProxy:
 
         rospy.loginfo('Started on port ' + port_name)
 
-        self.stats_pub = rospy.Publisher("/bridge/stats", BridgeStats, queue_size=10, latch=True)
+        # self.stats_pub = rospy.Publisher("/bridge/stats", BridgeStats, queue_size=10, latch=True)
 
     def init_services(self):
-        rospy.Service('/bridge/subscribe_topic', BridgeSubscribeTopic, lambda x: self.subscribe(x.name))
-        rospy.Service('/bridge/unsubscribe_topic', BridgeSubscribeTopic, lambda x: self.unsubscribe(x.name))
         rospy.Service('/bridge/send', BridgeSend, lambda x: self.send_packet(x.opcode, x.data))
         rospy.Service('/bridge/request_image', BridgeRequestImage, lambda x: self.request_image(x.id))
+        # rospy.Service('/bridge/request_image', BridgeRequestImage, lambda x: self.request_image(x.id))
 
     def init_port(self):
-        self._write_thread = threading.Thread(target=self._process_output, daemon=True)
-        self._write_thread.start()
-        self._read_thread = threading.Thread(target=self.spin, daemon=True)
-        self._read_thread.start()
-
-    # Subscribe procedure
-
-    # STEP 0 DEV0
-    def subscribe(self, topic):
-        rospy.loginfo('Got user request for receiving topic updates ' + topic)
-        self.send_packet(Opcodes.SUB_TOPIC, topic.encode('utf-8'))
-        enc = utils.encode_topic(topic)
-        msg_type = utils.msg_object_by_topic(topic)
-        self.publishers[enc] = rospy.Publisher(topic + self.topic_postfix, msg_type, queue_size=0, latch=True)
-        return 0
-
-    # STEP 1 DEV1
-    def _subscribe_request(self, data):
-        topic = data.decode('utf-8')
-        rospy.loginfo('Got subscribe request from other node for ' + topic)
-        if topic not in self.subscribers:
-            self.subscribers[topic] = rospy.Subscriber(
-                topic,
-                utils.msg_object_by_topic(topic),
-                lambda x: self._subscriber(utils.encode_topic(data), x)
-            )
-
-    # STEP 2 DEV1 
-    def _subscriber(self, topic, data):
-        rospy.loginfo('Forwarding message to serial: ' + str(data))
-        self.send_packet(Opcodes.ROS_TOPIC, [topic, data])
-
-    # STEP 3 DEV0
-    def _topic_update(self, raw):
-        t_enc = bytes(raw[:2])
-        rospy.loginfo('Forwarding message to ROS: ' + str(raw))
-        if t_enc not in self.publishers:
-            return
-        pub = self.publishers[t_enc]
-        new_msg = pub.data_class()
-        new_msg.deserialize(raw[2:])
-        pub.publish(new_msg)
-
-    # Subscribe procedure
-
-    # STEP 0 DEV0
-    def unsubscribe(self, topic):
-        rospy.loginfo('Got user request to UNsubscribe topic ' + topic)
-        self.send_packet(Opcodes.USUB_TOPIC, topic.encode('utf-8'))
-        enc = utils.encode_topic(topic)
-        if enc in self.publishers:
-            self.publishers[enc].unregister()
-            del self.publishers[enc]
-        return 0
-
-    # STEP 1 DEV1
-    def _unsubscribe_request(self, data):
-        topic = data.decode('utf-8')
-        rospy.loginfo('Got UNsubscribe request from other node for ' + topic)
-        if topic in self.subscribers:
-            self.subscribers[topic].unregister()
-            del self.subscribers[topic]
-
-    # Non-ROS opcodes (when using this class as part of another module)
-
-    def subscribe_for_opcode(self, opcode, cb):
-        self.user_opcode_handlers[opcode] = cb
-
-    def aux_opcode_handler(self, opcode, data):
-        if opcode in self.user_opcode_handlers:
-            self.user_opcode_handlers[opcode](data)
+        self._io_thread = threading.Thread(target=self._process_io, daemon=True)
+        self._io_thread.start()
+        self._worker_thread = threading.Thread(target=self._execute_messages, daemon=True)
+        self._worker_thread.start()
 
     # Camera
 
     def request_image(self, cid, quality=10):
-        self.send_packet(Opcodes.CAM_REQ, [cid, quality])
+        self.begin_cmd_packet()
+        self.append_cmd(Opcodes.C_CAM_REQ, [cid, quality])
+        self.send_cmd_packet()
 
     def _send_image_from_cam(self, data):
         if self._camera_controller is None:
@@ -209,10 +147,10 @@ class SerialProxy:
         ext = self.image_chunk_size - (len(img) % self.image_chunk_size)
         img = bytearray(img)
         img.extend([0x00] * ext)
-        self.send_packet(Opcodes.CAM_START, ext)
+        self.send_packet(Opcodes.R_CAM_START, ext)
         for i in range(len(img) // self.image_chunk_size):
-            self.send_packet(Opcodes.CAM_DATA, img[i * self.image_chunk_size: (i + 1) * self.image_chunk_size])
-        self.send_packet(Opcodes.CAM_STOP, [])
+            self.send_packet(Opcodes.R_CAM_DATA, img[i * self.image_chunk_size: (i + 1) * self.image_chunk_size])
+        self.send_packet(Opcodes.R_CAM_STOP, [])
 
     def _add_cam_data(self, data):
         print("ADD", len(data))
@@ -226,9 +164,32 @@ class SerialProxy:
 
     def _stop_cam_data(self, data):
         res = self._img_buffer[:-self._img_ext]
-        print("END", self._img_ext, len(res))
+        print("Got img", self._img_ext, len(res))
         self._img_ext = None
-        open('res.jpg', 'wb').write(res)
+        open(time.ctime() + '.jpg', 'wb').write(res)
+
+    # 3b packet handling
+
+    def begin_cmd_packet(self):
+        self._msg_stack.clear()
+        # self.append_cmd(Opcodes.INTERNAL, self.START_BYTES)
+
+    def append_cmd(self, opcode, data):
+        self._msg_stack.extend(bytes([opcode, *data]))
+
+    def send_cmd_packet(self):
+        # self.append_cmd(Opcodes.INTERNAL, [self.END_BYTE, self.END_BYTE])
+        self._send(self._msg_stack)
+        self._msg_stack.clear()
+
+    def subscribe_for_opcode(self, opcode, cb):
+        if opcode < Opcodes.MIN_USER_OPCODE:
+            raise ValueError("Not available. Use opcodes starting from Opcodes.MIN_USER_OPCODE")
+        self.user_opcode_handlers[opcode] = cb
+
+    def aux_opcode_handler(self, opcode, data):
+        if opcode in self.user_opcode_handlers:
+            self.user_opcode_handlers[opcode](data)
 
     # Serial port methods
 
@@ -240,11 +201,12 @@ class SerialProxy:
             self._camera_controller.close()
         self.port.close()
         self._run = False
-        self._write_thread.join()
-        self._read_thread.join()
+        self._io_thread.join()
+        self._worker_thread.join()
 
     def _send(self, data, priority=0):
-        self._output_packet_queue.put(PrioritizedMessage(priority, data))
+        # self._output_packet_queue.put(PrioritizedMessage(priority, bytes([*data])))
+        self._output_packet_queue.put(bytes([*data]))
 
     def _read(self, cnt=1):
         return self.port.read(cnt)
@@ -252,18 +214,45 @@ class SerialProxy:
     def _read_byte(self):
         return int(self.port.read()[0])
 
-    def _process_output(self):
+    def _execute_messages(self):
         while not rospy.is_shutdown() and self._run:
-            if not self._output_packet_queue.empty():
-                self.port.write(self._output_packet_queue.get().item)
-                self.port.flushOutput()
+            if not self._exec_queue.empty():
+                data = self._exec_queue.get()
+                self._execute_msg(data[0], data[1:])
 
-    def spin(self):
+    def _execute_msg(self, opcode, data):
+        try:
+            opcode = Opcodes(opcode)
+            if opcode in self.handlers:
+                self.handlers[opcode](data)
+                return
+        except ValueError:
+            pass
+        self.aux_opcode_handler(opcode, data)
+
+    # IO threaded processing
+
+    def _process_io(self):
         self._pass_first_header = False
         while not rospy.is_shutdown() and self._run:
-            self._process_input()
+            if self.is_robot:
+                self._process_input_robot()
+            else:
+                self._process_input_base()
 
-    def _process_input(self):
+            self._process_output()
+
+    def _process_output(self):
+        if not self._output_packet_queue.empty():
+            # w = self._output_packet_queue.get().item
+            self.port.write(self._output_packet_queue.get())
+            self.port.flushOutput()
+
+    def _process_input_robot(self):
+        if self.port.inWaiting() >= 3:
+            self._exec_queue.put(self._read(3))
+
+    def _process_input_base(self):
         if self.port.inWaiting() < 2:
             return
 
@@ -294,29 +283,33 @@ class SerialProxy:
             return
 
         nonce, opcode, data, err = self.unpack(raw[:-1])
-
+        print(opcode)
         if opcode is None:
             if self._resend_req_mode:
                 self.send_packet(Opcodes.RESEND, nonce)
             return
 
         rospy.logdebug("Received: ", nonce, opcode, data, err)
-        # TODO about err
+        # TODO send err data
 
-        try:
-            opcode = Opcodes(opcode)
-            if opcode in self.handlers:
-                self.handlers[opcode](data)
-                return
-        except ValueError:
-            pass
-        self.aux_opcode_handler(opcode, data)
+        self._execute_msg(opcode, data)
 
     def send_packet(self, opcode, data):
+        if not self.is_robot:
+            if len(data) > 2:
+                rospy.logerr("Can't send long message to robot")
+                return
+            self.begin_cmd_packet()
+            self.append_cmd(opcode, data)
+            self.send_cmd_packet()
+            return
         data = utils.preprocess_types(data)
         raw = self.pack(opcode, data)
         self.sent_packets[self.nonce] = raw
-        self._send(raw, priority=(1 if opcode == Opcodes.CAM_DATA else 0))
+        self._send(raw,
+                   priority=(0 if opcode in [Opcodes.R_CAM_DATA,
+                                             Opcodes.R_CAM_START,
+                                             Opcodes.R_CAM_STOP] else 0))
         return 0
 
     # Serialization/deserialization

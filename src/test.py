@@ -1,51 +1,38 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from protocol import SerialProxy
-import threading
 import sys
-import time 
+
 from cam import Camera
+from protocol import SerialProxy
+import signal
 
-import rospy
-from std_msgs.msg import String
+# p.subscribe_for_opcode(0x44, lambda x: p.send_packet(0x99, 0x23))
 
-        # p.subscribe_for_opcode(0x44, lambda x: p.send_packet(0x99, 0x23))
+p = None
 
-from std_msgs.msg import String
+def die(n, f):
+    p.close()
+    exit(0)
 
-# rospy.Subscriber("/y", String, lambda x: print("@#@", x))
+
+signal.signal(signal.SIGINT, die)
+signal.signal(signal.SIGTERM, die)
+
 
 if len(sys.argv) > 1:
-    p = None
-    try:
-        p = SerialProxy("/dev/pts/8", 115200, topic_postfix='/dev')
-        # p.subscribe_for_opcode(0x44, lambda x: p.send_packet(0x99, 0x23))
-        # p._subscribe_request('/test'.encode())
-        p.subscribe('/test')
-        # p.spin()
-        p.request_image(1, 10)
-        while True:
-            pass
-    except KeyboardInterrupt:
-        p.close()
-    finally:
-        p.close()
+    p = SerialProxy("/dev/pts/10", 115200, topic_postfix='/dev')
+    # p.begin_cmd_packet()
+    # p.append_cmd(0x09, [0x34, 0x76])
+    # p.append_cmd(0x47, [0x43, 0x69])
+    # p.send_cmd_packet()
+    p.request_image(1, 10)
+    while True:
+        pass
 else:
-    p = None
-    # p = rospy.Publisher(topic, AnyMsg, queue_size=10)
+    p = SerialProxy("/dev/pts/11", 115200, is_robot=True, topic_postfix='/dev', camera_controller=Camera())
+    # p.subscribe_for_opcode(0x09, print)
+    # p.subscribe_for_opcode(0x47, print)
 
-    try:
-        p = SerialProxy("/dev/pts/7", 115200, topic_postfix='/dev', camera_controller=Camera())
-        # p.subscribe_for_opcode(0x99, lambda x: print("!!!!", x))
-        # p.su(0x44, bytes([0x11]))
-        # p.spin()
-        
-        while True:
-            pass
-            # p.spin()
-            # time.sleep(1)
-    except KeyboardInterrupt:
-        p.close()
-    finally:
-        p.close()
+    while True:
+        pass

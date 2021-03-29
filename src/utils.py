@@ -1,17 +1,20 @@
+from hashlib import blake2b
+from io import BytesIO
+
 import roslib
 import rostopic
-from hashlib import blake2b
+
 
 def encode_topic(data):
     return blake2b(
-        data.encode('utf-8') if type(data) is str else data, 
+        data.encode('utf-8') if type(data) is str else data,
         digest_size=2
     ).digest()
+
 
 def msg_object_by_topic(topic):
     return roslib.message.get_message_class(rostopic.get_topic_type('/test')[0])
 
-from io import BytesIO
 
 def preprocess_types(data):
     if type(data) is list:
@@ -29,3 +32,11 @@ def preprocess_types(data):
     else:
         res = data
     return res
+
+
+def to_2b(data):
+    return data // 256, data % 256
+
+
+def from_2b(a, b):
+    return 256 * a + b
