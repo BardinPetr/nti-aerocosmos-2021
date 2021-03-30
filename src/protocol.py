@@ -1,20 +1,19 @@
-import enum
 import threading
 import time
 from dataclasses import field
-from queue import Queue, PriorityQueue
+from queue import Queue
 
 from attr import dataclass
-from nti_acs.srv import BridgeSend, BridgeRequestImage
+from nti_acs.srv import BridgeSend, BridgeRequestImage, BridgeSubscribeTopic
 from reedsolo import RSCodec, ReedSolomonError
 from serial import Serial
 
 import rospy
 import utils
+from src.nti_acs.src.opcodes import Opcodes
 
 '''
 Message description (full):
-
 Base:
 0-1: START_BYTES
 2: SIZE (3+n+m)
@@ -23,27 +22,17 @@ Base:
 [5;5+n]: DATA len=n
 [6+n; 6+n+m]: REED-SOLOMON CODE len=m
 7+n+m: END_BYTE
-
-Short:
-0: Opcode
-
-
 '''
-
-
-class Opcodes(enum.IntEnum):
-    INTERNAL = 0x00
-    C_CAM_REQ = 0x01  # [cam id, None]
-    R_CAM_START = 0x05
-    R_CAM_DATA = 0x06
-    R_CAM_STOP = 0x07
-    MIN_USER_OPCODE = 0xA0
 
 
 @dataclass(order=True)
 class PrioritizedMessage:
     priority: int
     item: bytes = field(compare=False)
+
+
+def _sleep(raw):
+    time.sleep(utils.from_2b(*raw) / 1000)
 
 
 class SerialProxy:
@@ -98,10 +87,11 @@ class SerialProxy:
         self.topic_postfix = topic_postfix
 
         self.handlers = {
-            Opcodes.C_CAM_REQ: self._send_image_from_cam,
-            Opcodes.R_CAM_START: self._start_cam_data,
-            Opcodes.R_CAM_STOP: self._stop_cam_data,
-            Opcodes.R_CAM_DATA: self._add_cam_data,
+            Opcodes.CAM_REQ: self._send_image_from_cam,
+            Opcodes.CAM_START: self._start_cam_data,
+            Opcodes.CAM_STOP: self._stop_cam_data,
+            Opcodes.CAM_DATA: self._add_cam_data,
+            Opcodes.WAIT: _sleep
         }
 
         self.subscribers = {}
@@ -119,6 +109,8 @@ class SerialProxy:
         # self.stats_pub = rospy.Publisher("/bridge/stats", BridgeStats, queue_size=10, latch=True)
 
     def init_services(self):
+        rospy.Service('/bridge/subscribe_topic', BridgeSubscribeTopic, lambda x: self.subscribe(x.name))
+        rospy.Service('/bridge/unsubscribe_topic', BridgeSubscribeTopic, lambda x: self.unsubscribe(x.name))
         rospy.Service('/bridge/send', BridgeSend, lambda x: self.send_packet(x.opcode, x.data))
         rospy.Service('/bridge/request_image', BridgeRequestImage, lambda x: self.request_image(x.id))
         # rospy.Service('/bridge/request_image', BridgeRequestImage, lambda x: self.request_image(x.id))
@@ -133,7 +125,7 @@ class SerialProxy:
 
     def request_image(self, cid, quality=10):
         self.begin_cmd_packet()
-        self.append_cmd(Opcodes.C_CAM_REQ, [cid, quality])
+        self.append_cmd(Opcodes.CAM_REQ, [cid, quality])
         self.send_cmd_packet()
 
     def _send_image_from_cam(self, data):
@@ -147,10 +139,10 @@ class SerialProxy:
         ext = self.image_chunk_size - (len(img) % self.image_chunk_size)
         img = bytearray(img)
         img.extend([0x00] * ext)
-        self.send_packet(Opcodes.R_CAM_START, ext)
+        self.send_packet(Opcodes.CAM_START, ext)
         for i in range(len(img) // self.image_chunk_size):
-            self.send_packet(Opcodes.R_CAM_DATA, img[i * self.image_chunk_size: (i + 1) * self.image_chunk_size])
-        self.send_packet(Opcodes.R_CAM_STOP, [])
+            self.send_packet(Opcodes.CAM_DATA, img[i * self.image_chunk_size: (i + 1) * self.image_chunk_size])
+        self.send_packet(Opcodes.CAM_STOP, [])
 
     def _add_cam_data(self, data):
         print("ADD", len(data))
@@ -183,8 +175,8 @@ class SerialProxy:
         self._msg_stack.clear()
 
     def subscribe_for_opcode(self, opcode, cb):
-        if opcode < Opcodes.MIN_USER_OPCODE:
-            raise ValueError("Not available. Use opcodes starting from Opcodes.MIN_USER_OPCODE")
+        if opcode in self.handlers:
+            raise ValueError("Not available.")
         self.user_opcode_handlers[opcode] = cb
 
     def aux_opcode_handler(self, opcode, data):
@@ -307,9 +299,9 @@ class SerialProxy:
         raw = self.pack(opcode, data)
         self.sent_packets[self.nonce] = raw
         self._send(raw,
-                   priority=(0 if opcode in [Opcodes.R_CAM_DATA,
-                                             Opcodes.R_CAM_START,
-                                             Opcodes.R_CAM_STOP] else 0))
+                   priority=(0 if opcode in [Opcodes.CAM_DATA,
+                                             Opcodes.CAM_START,
+                                             Opcodes.CAM_STOP] else 0))
         return 0
 
     # Serialization/deserialization
@@ -334,6 +326,64 @@ class SerialProxy:
 
         data = self.rsc.encode(data)
         return bytes([*SerialProxy.START_BYTES, size, *data, SerialProxy.END_BYTE])
+
+    # ROS TOPIC PROXY
+
+    # STEP 0 DEV0
+    def subscribe(self, topic):
+        rospy.loginfo('Got user request for receiving topic updates ' + topic)
+        self.send_packet(Opcodes.SUB_TOPIC, topic.encode('utf-8'))
+        enc = utils.encode_topic(topic)
+        msg_type = utils.msg_object_by_topic(topic)
+        self.publishers[enc] = rospy.Publisher(topic + self.topic_postfix, msg_type, queue_size=0, latch=True)
+        return 0
+
+    # STEP 1 DEV1
+    def _subscribe_request(self, data):
+        topic = data.decode('utf-8')
+        rospy.loginfo('Got subscribe request from other node for ' + topic)
+        if topic not in self.subscribers:
+            self.subscribers[topic] = rospy.Subscriber(
+                topic,
+                utils.msg_object_by_topic(topic),
+                lambda x: self._subscriber(utils.encode_topic(data), x)
+            )
+
+    # STEP 2 DEV1
+    def _subscriber(self, topic, data):
+        rospy.loginfo('Forwarding message to serial: ' + str(data))
+        self.send_packet(Opcodes.ROS_TOPIC, [topic, data])
+
+    # STEP 3 DEV0
+    def _topic_update(self, raw):
+        t_enc = bytes(raw[:2])
+        rospy.loginfo('Forwarding message to ROS: ' + str(raw))
+        if t_enc not in self.publishers:
+            return
+        pub = self.publishers[t_enc]
+        new_msg = pub.data_class()
+        new_msg.deserialize(raw[2:])
+        pub.publish(new_msg)
+
+    # Subscribe procedure
+
+    # STEP 0 DEV0
+    def unsubscribe(self, topic):
+        rospy.loginfo('Got user request to UNsubscribe topic ' + topic)
+        self.send_packet(Opcodes.USUB_TOPIC, topic.encode('utf-8'))
+        enc = utils.encode_topic(topic)
+        if enc in self.publishers:
+            self.publishers[enc].unregister()
+            del self.publishers[enc]
+        return 0
+
+    # STEP 1 DEV1
+    def _unsubscribe_request(self, data):
+        topic = data.decode('utf-8')
+        rospy.loginfo('Got UNsubscribe request from other node for ' + topic)
+        if topic in self.subscribers:
+            self.subscribers[topic].unregister()
+            del self.subscribers[topic]
 
 
 class DataLengthError(ValueError):

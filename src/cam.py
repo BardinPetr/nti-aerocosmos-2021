@@ -2,18 +2,23 @@ import cv2
 
 
 class Camera:
-    def __init__(self, size=(400, 300)) -> None:
+    def __init__(self, cameras=None, size=(400, 300)) -> None:
+        if cameras is None:
+            cameras = []
         self.camera = {}
         self.size = size
-        i = 1  # TODO
-        while True:
-            cam = cv2.VideoCapture(i)
-            if cam.read()[0]:
-                self.camera[i] = cam
-            elif i > 10:
-                break
-            i += 1
-        print("Cams found:", self.camera.keys())
+        if cameras is None:
+            i = 0
+            while True:
+                cam = cv2.VideoCapture(i)
+                if cam.read()[0]:
+                    self.camera[i] = cam
+                elif i > 10:
+                    break
+                i += 1
+        else:
+            self.camera = {cv2.VideoCapture(i) for i in cameras}
+        print("Cams used:", self.camera.keys())
 
     def prepare(self, image, quality=10):
         if image is str:
