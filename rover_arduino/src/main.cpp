@@ -1,7 +1,13 @@
+#define GRIPPER_CLOSED 0
+#define GRIPPER_OPEN 90
+
 #include <Arduino.h>
 #include <Servo.h>
 
 #include <ros.h>
+#include <nti_acs/Manipulator.h>
+#include <nti_acs/CamPos.h>
+#include <std_msgs/UInt16.h>
 
 using namespace std_msgs;
 using namespace nti_acs;
@@ -22,16 +28,16 @@ class NewHardware : public ArduinoHardware
 
 ros::NodeHandle_<NewHardware>  nh;
 
-void sub_cb_m( const nti_acs::Manipulator& x){
-    if (x.arrow0 != -1 && x.arrow0 != 252) man_arrow_0.write(x.arrow0);
-    if (x.arrow1 != -1 && x.arrow1 != 252) man_arrow_1.write(x.arrow1);
+void sub_cb_m( const Manipulator& x){
+    if (x.arrow_0 != -1 && x.arrow_0 != 252) man_arrow_0.write(x.arrow_0);
+    if (x.arrow_1 != -1 && x.arrow_1 != 252) man_arrow_1.write(x.arrow_1);
     if (x.yaw != -1) man_yaw.write(x.yaw);
     if (x.grip != -1) man_grip.write(x.grip ? GRIPPER_CLOSED : GRIPPER_OPEN);
 }
 ros::Subscriber<Manipulator> sub_m("/ard/manipulator", sub_cb_m);
 
 
-void sub_cb_c( const nti_acs::CamPos& x){
+void sub_cb_c( const CamPos& x){
     if (x.pitch != -1 && x.pitch != 252) cam_pitch.write(x.pitch);
     if (x.yaw != -1 && x.yaw != 252) {
         // TODO

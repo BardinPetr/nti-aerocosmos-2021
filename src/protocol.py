@@ -1,16 +1,31 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
+from future import standard_library
+
+standard_library.install_aliases()
+
+from builtins import bytes
+from builtins import int
+from builtins import object
+from builtins import open
+from builtins import range
+from builtins import str
+
 import threading
 import time
-from dataclasses import field
 from queue import Queue
 
-from attr import dataclass
 from nti_acs.srv import BridgeSend, BridgeRequestImage, BridgeSubscribeTopic
 from reedsolo import RSCodec, ReedSolomonError
 from serial import Serial
 
 import rospy
 import utils
-from src.nti_acs.src.opcodes import Opcodes
+
+from opcodes import Opcodes
 
 '''
 Message description (full):
@@ -25,17 +40,17 @@ Base:
 '''
 
 
-@dataclass(order=True)
-class PrioritizedMessage:
-    priority: int
-    item: bytes = field(compare=False)
+# @dataclass(order=True)
+# class PrioritizedMessage(object):
+#     priority: int
+#     item: bytes = field(compare=False)
 
 
 def _sleep(raw):
-    time.sleep(utils.from_2b(*raw) / 1000)
+    time.sleep(utils.from_2b(raw[0], raw[1]) / 1000)
 
 
-class SerialProxy:
+class SerialProxy(object):
     SERIAL_TIMEOUT = 5
     SERIAL_TIMEOUT_FAST = 1
 
@@ -69,8 +84,10 @@ class SerialProxy:
                  resend_req_enabled=False,
                  topic_postfix='',
                  image_chunk_size=235,
-                 camera_controller=None
+                 camera_controller=None,
+                 reed_solomon=False
                  ):
+        self.reed_solomon = reed_solomon
         self.is_robot = is_robot
         self.sent_packets = {}
         self.rsc_n = rsc_n
@@ -94,13 +111,17 @@ class SerialProxy:
             Opcodes.WAIT: _sleep
         }
 
+        self.preprocessors = {
+            Opcodes.ODOM: (utils.preprocess_odom, utils.postprocess_odom)
+        }
+
         self.subscribers = {}
 
         self.publishers = {}
         self.user_opcode_handlers = {}
 
-        name = 'serial_proxy_node_' + port_name.replace('/', '')
-        rospy.init_node(name)
+        name = 'serial_proxy_node'
+        # rospy.init_node(name, anonymous=True)
 
         self.init_services()
 
@@ -116,9 +137,11 @@ class SerialProxy:
         # rospy.Service('/bridge/request_image', BridgeRequestImage, lambda x: self.request_image(x.id))
 
     def init_port(self):
-        self._io_thread = threading.Thread(target=self._process_io, daemon=True)
+        self._io_thread = threading.Thread(target=self._process_io)
+        self._io_thread.daemon = True
         self._io_thread.start()
-        self._worker_thread = threading.Thread(target=self._execute_messages, daemon=True)
+        self._worker_thread = threading.Thread(target=self._execute_messages)
+        self._worker_thread.daemon = True
         self._worker_thread.start()
 
     # Camera
@@ -131,8 +154,8 @@ class SerialProxy:
     def _send_image_from_cam(self, data):
         if self._camera_controller is None:
             return
-        rospy.loginfo(f"Sending image from cam {data[0]} with quality {data[1]}")
-        img = self._camera_controller.get(*data)
+        rospy.loginfo("Sending image from cam")
+        img = self._camera_controller.get(data[0], data[1])
         self.send_image(img)
 
     def send_image(self, img):
@@ -166,8 +189,8 @@ class SerialProxy:
         self._msg_stack.clear()
         # self.append_cmd(Opcodes.INTERNAL, self.START_BYTES)
 
-    def append_cmd(self, opcode, data):
-        self._msg_stack.extend(bytes([opcode, *data]))
+    def append_cmd(self, opcode, data=[0, 0]):
+        self._msg_stack.extend(bytes([opcode] + list(data)))
 
     def send_cmd_packet(self):
         # self.append_cmd(Opcodes.INTERNAL, [self.END_BYTE, self.END_BYTE])
@@ -198,7 +221,7 @@ class SerialProxy:
 
     def _send(self, data, priority=0):
         # self._output_packet_queue.put(PrioritizedMessage(priority, bytes([*data])))
-        self._output_packet_queue.put(bytes([*data]))
+        self._output_packet_queue.put(bytes(data))
 
     def _read(self, cnt=1):
         return self.port.read(cnt)
@@ -215,6 +238,8 @@ class SerialProxy:
     def _execute_msg(self, opcode, data):
         try:
             opcode = Opcodes(opcode)
+            if opcode in self.preprocessors:
+                data = self.preprocessors[opcode][1](data)
             if opcode in self.handlers:
                 self.handlers[opcode](data)
                 return
@@ -242,7 +267,7 @@ class SerialProxy:
 
     def _process_input_robot(self):
         if self.port.inWaiting() >= 3:
-            self._exec_queue.put(self._read(3))
+            self._exec_queue.put(bytes(self._read(3)))
 
     def _process_input_base(self):
         if self.port.inWaiting() < 2:
@@ -275,7 +300,7 @@ class SerialProxy:
             return
 
         nonce, opcode, data, err = self.unpack(raw[:-1])
-        print(opcode)
+        # print(opcode)
         if opcode is None:
             if self._resend_req_mode:
                 self.send_packet(Opcodes.RESEND, nonce)
@@ -286,7 +311,7 @@ class SerialProxy:
 
         self._execute_msg(opcode, data)
 
-    def send_packet(self, opcode, data):
+    def send_packet(self, opcode, data=[0, 0]):
         if not self.is_robot:
             if len(data) > 2:
                 rospy.logerr("Can't send long message to robot")
@@ -295,7 +320,10 @@ class SerialProxy:
             self.append_cmd(opcode, data)
             self.send_cmd_packet()
             return
+        if opcode in self.preprocessors:
+            data = self.preprocessors[opcode][0](data)
         data = utils.preprocess_types(data)
+        # print(2, len(data))
         raw = self.pack(opcode, data)
         self.sent_packets[self.nonce] = raw
         self._send(raw,
@@ -307,6 +335,8 @@ class SerialProxy:
     # Serialization/deserialization
 
     def unpack(self, raw):
+        if not self.reed_solomon:
+            return raw[0], raw[1], raw[2:], 0
         try:
             decoded, _, err_pos = self.rsc.decode(raw)
             return decoded[0], decoded[1], decoded[2:], len(err_pos)  # nonce, opcode, data, error_count
@@ -315,17 +345,17 @@ class SerialProxy:
 
     def pack(self, opcode, data):
         self.nonce = (self.nonce + 1) % 255
-        size = 3 + len(data) + self.rsc_n
+        size = 3 + len(data) + (self.rsc_n if self.reed_solomon else 0)
 
         opcode = opcode if type(opcode) is int else opcode.value
-        data = [self.nonce, opcode, *data]
+        data = [self.nonce, opcode] + list(data)
         if opcode < 0 or opcode > 255:
             raise ValueError('Invalid opcode')
         if size >= SerialProxy.MSG_MAXSIZE:
             raise DataLengthError(size - SerialProxy.MSG_MAXSIZE)
-
-        data = self.rsc.encode(data)
-        return bytes([*SerialProxy.START_BYTES, size, *data, SerialProxy.END_BYTE])
+        if self.reed_solomon:
+            data = self.rsc.encode(data)
+        return SerialProxy.START_BYTES + bytes([size]) + bytearray(data) + bytes([SerialProxy.END_BYTE])
 
     # ROS TOPIC PROXY
 

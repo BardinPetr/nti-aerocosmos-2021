@@ -1,8 +1,18 @@
+from __future__ import print_function
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+
+from builtins import object
+from builtins import int
+
 import cv2
 
 
-class Camera:
-    def __init__(self, cameras=None, size=(400, 300)) -> None:
+class Camera(object):
+    def __init__(self, cameras=None, size=(400, 300)):
         if cameras is None:
             cameras = []
         self.camera = {}
@@ -17,7 +27,7 @@ class Camera:
                     break
                 i += 1
         else:
-            self.camera = {cv2.VideoCapture(i) for i in cameras}
+            self.camera = {i: cv2.VideoCapture(i) for i in cameras}
         print("Cams used:", self.camera.keys())
 
     def prepare(self, image, quality=10):

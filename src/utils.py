@@ -1,4 +1,14 @@
-from hashlib import blake2b
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+from __future__ import unicode_literals
+
+import pickle
+
+from future import standard_library
+
+standard_library.install_aliases()
+from pyblake2 import blake2b
 from io import BytesIO
 
 import roslib
@@ -40,3 +50,16 @@ def to_2b(data):
 
 def from_2b(a, b):
     return 256 * a + b
+
+
+def postprocess_odom(raw):
+    return pickle.loads(raw)
+
+
+def preprocess_odom(hardware):
+    loc = hardware.location()
+    return pickle.dumps([
+        loc.x,
+        loc.y,
+        hardware.orientation()[2]]
+    )
