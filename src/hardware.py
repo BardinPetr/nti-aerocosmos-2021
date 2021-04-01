@@ -29,10 +29,10 @@ class Hardware(object):
     STEPPER_FULL_TURN = 1000
     cur_stepper_pos = 0
 
-    GRIPPER_OPENED = 80
+    GRIPPER_OPENED = 0
     GRIPPER_CLOSED = 90
 
-    BASE_SPD = 0.5
+    BASE_SPD = 0.8
 
     imu = None
     odom = None
@@ -46,16 +46,16 @@ class Hardware(object):
     _anti_collide_cb = None
 
     def __init__(self, spd_map=1, spd_map_angular=1, anti_collide_cb=None, sensor_ok_cb=None):
-        l = False
+        l = True
         self.cam_pos = rospy.Publisher("/ard/cam_pos", CamPos, queue_size=10, latch=l)
         self.vel = rospy.Publisher("/cmd_vel", Twist, queue_size=10, latch=l)
 
-        self.man_arrow = rospy.Publisher("/ard/manip_arrow", ManipulatorArrow, queue_size=0, latch=l)
-        self.man_grip = rospy.Publisher("/ard/manip_grip", Int16, queue_size=0, latch=l)
-        self.man_yaw = rospy.Publisher("/ard/manip_yaw", Int16, queue_size=0, latch=l)
+        self.man_arrow = rospy.Publisher("/ard/manip_arrow", ManipulatorArrow, queue_size=10, latch=l)
+        self.man_grip = rospy.Publisher("/ard/manip_grip", Int16, queue_size=10, latch=l)
+        self.man_yaw = rospy.Publisher("/ard/manip_yaw", Int16, queue_size=10, latch=l)
 
         self.sub_imu = rospy.Subscriber("/imu", Imu, lambda x: self.update_imu(x))
-        self.sub_odom = rospy.Subscriber("/odom", Odometry, lambda x: self.update_odom(x), )
+        self.sub_odom = rospy.Subscriber("/odom", Odometry, lambda x: self.update_odom(x))
         self.sub_dist = rospy.Subscriber("/ard/sonar", UInt16, lambda x: self.update_sonar(x))
         self.sub_light = rospy.Subscriber("/ard/light", UInt16, lambda x: self.update_light(x))
 
@@ -108,13 +108,18 @@ class Hardware(object):
         t = Twist()
         t.linear.x = spd_x * spd_coef
         t.linear.y = spd_y * spd_coef
-        self.vel.publish(t)
+        if spd_x == 0 and spd_y == 0:
+            self.turn(0)
+        else:
+            self.vel.publish(t)
 
     def stop(self):
         self.drive(0, 0)
+        self.turn(0)
 
     def turn(self, spd):
         t = Twist()
+        t.linear.z = spd * self.global_angular_spd_coef
         t.angular.z = spd * self.global_angular_spd_coef
         self.vel.publish(t)
 
@@ -169,8 +174,12 @@ class Hardware(object):
     def set_manipulator_yaw(self, a):
         self.man_yaw.publish(a)
 
+    def default_man(self):
+        h.set_manipulator_arrow(40, 180)
+
     def place_beacon(self, i):
-        pass  # TODO
+        arrow = [[60, 170], [70, 145], [75, 125], [75, 110]]
+        h.set_manipulator_arrow(*arrow[i])
 
     def auto_leave(self, thresh):
         while self.light < thresh:
@@ -178,21 +187,46 @@ class Hardware(object):
 
         sleep(2)
         self.drive(-0.4, 0)
-        sleep(2)
+        sleep(6)
         self.drive(0, 0)
+
+    def do_square(self, len, cb):
+        len /= 100
+
+        robot_add_len = 0.3
+        for i in range(4):
+            self.drive_dist(len - robot_add_len)
+            self.place_beacon(i)
+            cb()
+            self.drive_dist(robot_add_len)
+            self.turn_angle(90)
 
 
 if __name__ == "__main__":
     rospy.init_node("main", anonymous=True)
     h = Hardware()
 
-    sleep(1)
+    sleep(0.2)
+    # h.stop()
+    h.drive_dist(100)
+    # h.set_manipulator_yaw(180)
+    print(1)
+    # h.set_gripper(angle=180)
+    # sleep(2)
 
-    h.set_manipulator_yaw(30)
-    h.set_manipulator_arrow(255, 180)
+    # h.set_manipulator_arrow(70, 255)
     while True:
+        # h.man_grip.publish(int(input()))#h.set_gripper(angle=int(input()))
+
         # a, b, c = map(int, inputraw().split())
-        # h.set_manipulator_yaw(a)
-        h.set_manipulator_arrow(int(input()), int(input()))
+        # h.set_manipulator_yaw(int(input()))
+        # h.set_manipulator_arrow(int(input()), int(input()))
+        # for i in range(4):
+        #     h.default_man()
+        #     sleep(3)
+        #     h.place_beacon(i)
+        #     sleep(3)
+        pass
+
         # sleep(1)
-        # sleep(1)
+

@@ -32,7 +32,8 @@ class Opcodes(enum.IntEnum):
     TURN_TILL = 0xA3                    # [mode, val] ! reserved for future releases
     CIRCLE = 0xA4                       # [radius, mode] ! reserved for future releases
     ANTI_COLLIDE = 0xA5                 # [dist cm 2b] // enable anti-forward-collision mode using US with threshold. 0 means disable
-    AUTO_LEAVE = 0xA6                    # [] // initiate automatic leave mode according to light sensor
+    AUTO_LEAVE = 0xA6                   # [] // initiate automatic leave mode according to light sensor
+    AUTO_PLACE4 = 0xA7                  # [square size 2b] // automated place 4 beacons in verticles of square
 
     CAM_REQ = 0xB0                      # [cam dev id, JPEG quality] // request image from robots camera in JPEG
     CAM_PITCH = 0xB1                    # [angle deg, None] [0-180] // set cam pos

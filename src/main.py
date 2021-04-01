@@ -30,12 +30,15 @@ def led(r, g, b):
 
 led(255, 255, 0)
 
+c = Camera()
+
 p = SerialProxy(
     port_name=rospy.get_param('~modem_port',
                               '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0'),
+    is_robot=True,
     baud=rospy.get_param('~modem_baud', 115200),
     started_cb=lambda: led(0, 0, 255),
-    camera_controller=Camera()
+    camera_controller=c
 )
 
 has_odom = False
@@ -46,10 +49,12 @@ def has_odom_upd():
     has_odom = True
 
 
-d = Hardware(rospy.get_param('~spd_coef', 0.05),
-             rospy.get_param('~ang_spd_coef', 0.05),
+d = Hardware(rospy.get_param('~spd_coef', 1),
+             rospy.get_param('~ang_spd_coef', 1),
              anti_collide_cb=p.clear_queue,
              sensor_ok_cb=has_odom_upd)
+
+p.subscribe_for_kill(lambda: d.stop())
 
 
 def die(n, f):
@@ -96,6 +101,8 @@ p.subscribe_for_opcode(Opcodes.MANIPULATOR_YAW,
                        lambda x: d.set_manipulator_yaw(from_2b(*x)))
 p.subscribe_for_opcode(Opcodes.MANIPULATOR_EXEC,
                        lambda x: d.place_beacon(x[0]))
+p.subscribe_for_opcode(Opcodes.AUTO_PLACE4,
+                       lambda x: d.do_square(from_2b(*x), lambda: p.send_image_from_cam([2, 10])))
 
 rate = rospy.Rate(1)
 i = 255
@@ -103,5 +110,5 @@ j = 0
 while not rospy.is_shutdown():
     i = 255 if i == 0 else 0
     j = 255 if j == 0 else 0
-    led(255 if has_odom else 0, i, j)
+    led(0 if has_odom else 255, i, 0)
     rate.sleep()

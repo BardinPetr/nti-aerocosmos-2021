@@ -1,0 +1,10 @@
+<launch>
+  <node pkg="nti_acs" type="main.py" name="nti_acs_main" respawn="true"/>
+</launch>
+
+<!--
+~/ros_catkin_ws/src/turtlebro/launch/turtlebro.launch
+/etc/ros/melodic/turtlebro.d/turtlebro.launch
+
+<include file="$(find nti_asc)/launch/nti_robot.launch"/>
+-->

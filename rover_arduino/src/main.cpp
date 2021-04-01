@@ -29,6 +29,7 @@ const int BTN_PINS[] = {4, 4, 4, 4};
 #include <Servo.h>
 #include <AccelStepper.h>
 #include <Adafruit_NeoPixel.h>
+#include <ServoEasing.h>
 
 #include <ros.h>
 
@@ -49,13 +50,13 @@ NewPing sonar(TRIGGER_PIN, ECHO_PIN, 300);
 
 AccelStepper stepper(AccelStepper::FULL4WIRE, 8, 9, 10, 11); 
 
-Servo man_yaw;
-Servo man_grip;
-Servo man_arrow_0;
-Servo man_arrow_1;
-Servo cam_yaw;
-Servo cam_pitch;
-Servo cam_pitch_1;
+ServoEasing man_yaw;
+ServoEasing man_grip;
+ServoEasing man_arrow_0;
+ServoEasing man_arrow_1;
+ServoEasing cam_yaw;
+ServoEasing cam_pitch;
+ServoEasing cam_pitch_1;
 
 class NewHardware : public ArduinoHardware
 {
@@ -69,23 +70,23 @@ ros::NodeHandle_<NewHardware>  nh;
 void sub_cb_ma(const ManipulatorArrow& x){
     Serial.print(x.arrow0);
     Serial.println(x.arrow1);
-    if (x.arrow0 != -1 && x.arrow0 != 255) man_arrow_0.write(x.arrow0);
-    if (x.arrow1 != -1 && x.arrow1 != 255) man_arrow_1.write(x.arrow1);
+    if (x.arrow0 != -1 && x.arrow0 != 255) man_arrow_0.easeTo(x.arrow0);
+    if (x.arrow1 != -1 && x.arrow1 != 255) man_arrow_1.easeTo(x.arrow1);
 }
 
 void sub_cb_my(const Int16& x){
     Serial.println(x.data);
-    if (x.data != -1) man_yaw.write(x.data);
+    if (x.data != -1) man_yaw.easeTo(x.data);
 }
 
 void sub_cb_mg(const Int16& x){
-    if (x.data != -1) man_grip.write(x.data);
+    if (x.data != -1) man_grip.easeTo(x.data);
 }
 
 void sub_cb_c(const CamPos& x){
     if (x.pitch != -1) {
-        cam_pitch.write(x.pitch);
-        cam_pitch_1.write(x.pitch);
+        cam_pitch.easeTo(x.pitch);
+        cam_pitch_1.easeTo(x.pitch);
     }
     if (x.yaw != -1) stepper.moveTo(STEPS_CENTER + x.yaw);
 }
@@ -150,12 +151,12 @@ void setup() {
     cam_pitch.attach(SERVO_CP0);
     cam_pitch_1.attach(SERVO_CP1);
 
-    man_yaw.write(BASE_MY);
-    man_grip.write(BASE_MG);
-    man_arrow_0.write(BASE_MA0);
-    man_arrow_1.write(BASE_MA1);
-    cam_pitch.write(BASE_CP);
-    cam_pitch_1.write(BASE_CP1);
+    man_yaw.easeTo(BASE_MY);
+    man_grip.easeTo(BASE_MG);
+    man_arrow_0.easeTo(BASE_MA0);
+    man_arrow_1.easeTo(BASE_MA1);
+    cam_pitch.easeTo(BASE_CP);
+    cam_pitch_1.easeTo(BASE_CP1);
 
     stepper.setMaxSpeed(500);
     stepper.setSpeed(300);
@@ -166,13 +167,13 @@ void setup() {
     for(uint16_t i = 0; i < strip.numPixels(); i++) strip.setPixelColor(i, c);
     strip.show();
 
-    // man_grip.write(0);
+    // man_grip.easeTo(0);
     // delay(1000);
-    // man_grip.write(40);
+    // man_grip.easeTo(40);
     // delay(1000);
-    // man_grip.write(80);
+    // man_grip.easeTo(80);
     // delay(1000);
-    // man_grip.write(120);
+    // man_grip.easeTo(120);
     // delay(1000);
 
     // stepper.setSpeed(50);

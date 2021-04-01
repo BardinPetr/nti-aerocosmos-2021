@@ -3,6 +3,8 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+from threading import Thread
+
 from future import standard_library
 
 standard_library.install_aliases()
@@ -14,7 +16,6 @@ from builtins import open
 from builtins import range
 from builtins import str
 
-import threading
 import time
 from queue import Queue
 
@@ -86,14 +87,16 @@ class SerialProxy(object):
                  image_chunk_size=235,
                  camera_controller=None,
                  reed_solomon=False,
-                 started_cb=None
+                 started_cb=None,
+                 post_kill_cb=None
                  ):
+        self.post_kill_cb = post_kill_cb
         self.reed_solomon = reed_solomon
         self.is_robot = is_robot
         self.sent_packets = {}
         self.rsc_n = rsc_n
         self.rsc = RSCodec(rsc_n, nsize=self.MSG_MAXSIZE)
-
+        self.sending_img = 0
         self.port = Serial(port_name, baud, timeout=self.SERIAL_TIMEOUT, write_timeout=self.SERIAL_TIMEOUT)
         self.init_port()
 
@@ -105,7 +108,7 @@ class SerialProxy(object):
         self.topic_postfix = topic_postfix
 
         self.handlers = {
-            Opcodes.CAM_REQ: self._send_image_from_cam,
+            Opcodes.CAM_REQ: self.send_image_from_cam,
             Opcodes.CAM_START: self._start_cam_data,
             Opcodes.CAM_STOP: self._stop_cam_data,
             Opcodes.CAM_DATA: self._add_cam_data,
@@ -139,20 +142,27 @@ class SerialProxy(object):
         # rospy.Service('/bridge/request_image', BridgeRequestImage, lambda x: self.request_image(x.id))
 
     def init_port(self):
-        self._io_thread = threading.Thread(target=self._process_io)
+        self._io_thread = Thread(target=lambda: self._process_io())
         self._io_thread.daemon = True
         self._io_thread.start()
-        self._worker_thread = threading.Thread(target=self._execute_messages)
+        self._worker_thread = Thread(target=lambda: self._execute_messages())
         self._worker_thread.daemon = True
         self._worker_thread.start()
+
+    def subscribe_for_kill(self, x):
+        self.post_kill_cb = x
 
     def clear_queue(self):
         self._exec_queue.queue.clear()
 
     def _internal_cmd_handler(self, a, b):
         if a == 0xDE:
+            # sys.exit(0)
             self.clear_queue()
             rospy.loginfo("Clearing packet queue")
+            if self.post_kill_cb is not None:
+                self.post_kill_cb()
+            self.init_port()
 
     # Camera
 
@@ -161,17 +171,23 @@ class SerialProxy(object):
         self.append_cmd(Opcodes.CAM_REQ, [cid, quality])
         self.send_cmd_packet()
 
-    def _send_image_from_cam(self, data):
+    def send_image_from_cam(self, data, retry=10):
         if self._camera_controller is None:
             return
         rospy.loginfo("Sending image from cam")
         img = self._camera_controller.get(data[0], data[1])
-        self.send_image(img)
+        open(time.ctime() + '.jpg', 'wb').write(img)
+        if img is not None:
+            self.send_image(img)
+        elif retry > 0:
+            self.send_image_from_cam(data, retry - 1)
 
     def send_image(self, img):
         ext = self.image_chunk_size - (len(img) % self.image_chunk_size)
         img = bytearray(img)
         img.extend([0x00] * ext)
+        print("sending image of", len(img), "in packets", len(img) // self.image_chunk_size)
+        self.sending_img = 2 + len(img) // self.image_chunk_size
         self.send_packet(Opcodes.CAM_START, ext)
         for i in range(len(img) // self.image_chunk_size):
             self.send_packet(Opcodes.CAM_DATA, img[i * self.image_chunk_size: (i + 1) * self.image_chunk_size])
@@ -279,6 +295,11 @@ class SerialProxy(object):
             # w = self._output_packet_queue.get().item
             self.port.write(self._output_packet_queue.get())
             self.port.flushOutput()
+            if self.sending_img > 0:
+                time.sleep(0.2)
+                self.sending_img -= 1
+            else:
+                time.sleep(0.05)
 
     def _process_input_robot(self):
         if self.port.inWaiting() >= 3:
@@ -298,7 +319,7 @@ class SerialProxy(object):
             return
         else:
             err_cnt += 1
-        print("!!!")
+
         self._pass_first_header = False
         nxt = self._read_byte()
         if nxt == SerialProxy.START_BYTES[0]:
