@@ -15,6 +15,25 @@ import roslib
 import rostopic
 
 
+def translate(value, leftMin, leftMax, rightMin, rightMax):
+    leftSpan = leftMax - leftMin
+    rightSpan = rightMax - rightMin
+    valueScaled = float(value - leftMin) / float(leftSpan)
+    return rightMin + (valueScaled * rightSpan)
+
+
+def drive_to_robot(x, y):
+    x = 127 if x == 0 else int(translate(x, -1, 1, 0, 255))
+    y = 127 if y == 0 else int(translate(y, -1, 1, 0, 255))
+    return x, y
+
+
+def drive_on_robot(x, y):
+    x = 0 if x == 127 else translate(x, 0, 255, -1, 1)
+    y = 0 if y == 127 else translate(y, 0, 255, -1, 1)
+    return x, y
+
+
 def encode_topic(data):
     return blake2b(
         data.encode('utf-8') if type(data) is str else data,

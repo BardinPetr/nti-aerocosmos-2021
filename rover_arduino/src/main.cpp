@@ -1,17 +1,53 @@
+#define BTN_CNT 4
+const int BTN_PINS[] = {4, 4, 4, 4};
+
 #define GRIPPER_CLOSED 0
 #define GRIPPER_OPEN 90
 
+#define SERVO_MA0 44
+#define SERVO_MA1 45
+#define SERVO_MY 46
+#define SERVO_MG 5
+#define SERVO_CP0 6
+#define SERVO_CP1 7
+
+#define TRIGGER_PIN  3
+#define ECHO_PIN     2
+
+#define STEPS_CENTER 0
+#define STEPS_FULL 2200
+
+#define BASE_MY 150
+#define BASE_MA0 40
+#define BASE_MA1 180
+#define BASE_MG 0
+#define BASE_CP 20
+#define BASE_CP1 20
+
 #include <Arduino.h>
+#include <NewPing.h>
 #include <Servo.h>
+#include <AccelStepper.h>
+#include <Adafruit_NeoPixel.h>
 
 #include <ros.h>
-#include <nti_acs/Manipulator.h>
+
+#include <nti_acs/ManipulatorArrow.h>
 #include <nti_acs/CamPos.h>
 #include <std_msgs/UInt16.h>
+#include <std_msgs/Int16.h>
+#include <std_msgs/ColorRGBA.h>
+#include <std_msgs/UInt8MultiArray.h>
 
 using namespace std_msgs;
 using namespace nti_acs;
 
+
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(24, 30, NEO_GRB + NEO_KHZ800);
+
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, 300);
+
+AccelStepper stepper(AccelStepper::FULL4WIRE, 8, 9, 10, 11); 
 
 Servo man_yaw;
 Servo man_grip;
@@ -19,6 +55,7 @@ Servo man_arrow_0;
 Servo man_arrow_1;
 Servo cam_yaw;
 Servo cam_pitch;
+Servo cam_pitch_1;
 
 class NewHardware : public ArduinoHardware
 {
@@ -28,44 +65,139 @@ class NewHardware : public ArduinoHardware
 
 ros::NodeHandle_<NewHardware>  nh;
 
-void sub_cb_m( const Manipulator& x){
-    if (x.arrow_0 != -1 && x.arrow_0 != 252) man_arrow_0.write(x.arrow_0);
-    if (x.arrow_1 != -1 && x.arrow_1 != 252) man_arrow_1.write(x.arrow_1);
-    if (x.yaw != -1) man_yaw.write(x.yaw);
-    if (x.grip != -1) man_grip.write(x.grip ? GRIPPER_CLOSED : GRIPPER_OPEN);
+
+void sub_cb_ma(const ManipulatorArrow& x){
+    Serial.print(x.arrow0);
+    Serial.println(x.arrow1);
+    if (x.arrow0 != -1 && x.arrow0 != 255) man_arrow_0.write(x.arrow0);
+    if (x.arrow1 != -1 && x.arrow1 != 255) man_arrow_1.write(x.arrow1);
 }
-ros::Subscriber<Manipulator> sub_m("/ard/manipulator", sub_cb_m);
 
+void sub_cb_my(const Int16& x){
+    Serial.println(x.data);
+    if (x.data != -1) man_yaw.write(x.data);
+}
 
-void sub_cb_c( const CamPos& x){
-    if (x.pitch != -1 && x.pitch != 252) cam_pitch.write(x.pitch);
-    if (x.yaw != -1 && x.yaw != 252) {
-        // TODO
+void sub_cb_mg(const Int16& x){
+    if (x.data != -1) man_grip.write(x.data);
+}
+
+void sub_cb_c(const CamPos& x){
+    if (x.pitch != -1) {
+        cam_pitch.write(x.pitch);
+        cam_pitch_1.write(x.pitch);
     }
+    if (x.yaw != -1) stepper.moveTo(STEPS_CENTER + x.yaw);
 }
+
+void sub_cb_s(const ColorRGBA& x){
+    uint32_t c = strip.Color(x.r, x.g, x.b);
+    for(uint16_t i = 0; i < strip.numPixels(); i++) strip.setPixelColor(i, c);
+    strip.show();
+}
+
+
+ros::Subscriber<ManipulatorArrow> sub_ma("/ard/manip_arrow", sub_cb_ma);
+ros::Subscriber<Int16> sub_mg("/ard/manip_grip", sub_cb_mg);
+ros::Subscriber<Int16> sub_my("/ard/manip_yaw", sub_cb_my);
+
 ros::Subscriber<CamPos> sub_c("/ard/cam_pos", sub_cb_c);
+ros::Subscriber<ColorRGBA> sub_s("/ard/status", sub_cb_s);
+
 
 UInt16 sonar_data;
-ros::Publisher<UInt16> pub_sonar("/ard/sonar", &sonar_data);
+ros::Publisher pub_sonar("/ard/sonar", &sonar_data);
 
+UInt16 light_data;
+ros::Publisher pub_light("/ard/light", &light_data);
+
+UInt8MultiArray btn_data;
+ros::Publisher pub_btn("/ard/btn", &btn_data);
+
+
+long long int last_update = 0;
+
+
+void calibrate_stepper() {
+    stepper.setSpeed(50);
+    while(!digitalRead(BTN_PINS[0])) stepper.runSpeed();
+    stepper.stop();
+    stepper.runToNewPosition(STEPS_CENTER);
+}
 
 void setup() {
+    Serial.begin(9600);
+    strip.begin();
+    strip.setBrightness(50);
+    strip.show();
+
     nh.initNode();
     nh.subscribe(sub_c);
-    nh.subscribe(sub_m);
+    nh.subscribe(sub_ma);
+    nh.subscribe(sub_mg);
+    nh.subscribe(sub_my);
+    nh.subscribe(sub_s);
+    nh.advertise(pub_sonar);
+    nh.advertise(pub_light);
+    nh.advertise(pub_btn);
 
-    man_yaw.attach();
-    man_grip.attach();
-    man_arrow_0.attach();
-    man_arrow_1.attach();
-    cam_yaw.attach();
-    cam_pitch.attach();
+    for(int i = 0; i < BTN_CNT; i++) pinMode(BTN_PINS[i], INPUT);
+
+    man_yaw.attach(SERVO_MY);
+    man_grip.attach(SERVO_MG);
+    man_arrow_0.attach(SERVO_MA0);
+    man_arrow_1.attach(SERVO_MA1);
+    cam_pitch.attach(SERVO_CP0);
+    cam_pitch_1.attach(SERVO_CP1);
+
+    man_yaw.write(BASE_MY);
+    man_grip.write(BASE_MG);
+    man_arrow_0.write(BASE_MA0);
+    man_arrow_1.write(BASE_MA1);
+    cam_pitch.write(BASE_CP);
+    cam_pitch_1.write(BASE_CP1);
+
+    stepper.setMaxSpeed(500);
+    stepper.setSpeed(300);
+    stepper.setAcceleration(200);
+
+    memset(btn_data.data, 0, BTN_CNT);
+    uint32_t c = strip.Color(255, 0, 0);
+    for(uint16_t i = 0; i < strip.numPixels(); i++) strip.setPixelColor(i, c);
+    strip.show();
+
+    // man_grip.write(0);
+    // delay(1000);
+    // man_grip.write(40);
+    // delay(1000);
+    // man_grip.write(80);
+    // delay(1000);
+    // man_grip.write(120);
+    // delay(1000);
+
+    // stepper.setSpeed(50);
+    // while(true) stepper.runSpeed();
+    // calibrate_stepper();
+    // stepper.moveTo(2200);
 }
 
 void loop() {
-    sonar_data.data = 123;
-    pub_sonar.publish(&sonar_data);
+    // Serial.println(stepper.currentPosition());
 
     nh.spinOnce();
-    delay(1);
+
+    stepper.run();
+    delay(5);
+    if ((millis() - last_update) > 200) {
+        for(int i = 0; i < BTN_CNT; i++) btn_data.data[i] = digitalRead(BTN_PINS[i]);
+        pub_btn.publish(&btn_data);
+
+        light_data.data = analogRead(A0);
+        pub_light.publish(&light_data);
+
+        // sonar_data.data = sonar.ping_cm();
+        // pub_sonar.publish(&sonar_data);
+
+        last_update = millis();
+    }
 }

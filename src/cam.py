@@ -1,8 +1,10 @@
-from __future__ import print_function
 from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 from __future__ import unicode_literals
+
 from future import standard_library
+
 standard_library.install_aliases()
 
 from builtins import object
@@ -23,7 +25,7 @@ class Camera(object):
                 cam = cv2.VideoCapture(i)
                 if cam.read()[0]:
                     self.camera[i] = cam
-                elif i > 10:
+                elif i > 20:
                     break
                 i += 1
         else:
@@ -44,6 +46,8 @@ class Camera(object):
         return res.reshape(-1).tobytes()
 
     def get(self, id, quality=10):
+        if not (id in self.camera):
+            id = self.camera.keys()[0]
         ret, img = self.camera[id].read()
         if ret:
             return self.prepare(img)

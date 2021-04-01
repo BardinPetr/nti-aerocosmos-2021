@@ -1,2 +1,2 @@
-int8 arrow_0
-int8 arrow_1
+int16 arrow0
+int16 arrow1

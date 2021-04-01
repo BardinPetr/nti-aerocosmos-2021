@@ -53,7 +53,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   CamPos.msg
-  Manipulator.msg
+  ManipulatorArrow.msg
 )
 
 # Generate services in the 'srv' folder

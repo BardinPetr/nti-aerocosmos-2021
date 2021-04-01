@@ -85,7 +85,8 @@ class SerialProxy(object):
                  topic_postfix='',
                  image_chunk_size=235,
                  camera_controller=None,
-                 reed_solomon=False
+                 reed_solomon=False,
+                 started_cb=None
                  ):
         self.reed_solomon = reed_solomon
         self.is_robot = is_robot
@@ -127,7 +128,8 @@ class SerialProxy(object):
 
         rospy.loginfo('Started on port ' + port_name)
 
-        # self.stats_pub = rospy.Publisher("/bridge/stats", BridgeStats, queue_size=10, latch=True)
+        if started_cb is not None:
+            started_cb()
 
     def init_services(self):
         rospy.Service('/bridge/subscribe_topic', BridgeSubscribeTopic, lambda x: self.subscribe(x.name))
@@ -143,6 +145,14 @@ class SerialProxy(object):
         self._worker_thread = threading.Thread(target=self._execute_messages)
         self._worker_thread.daemon = True
         self._worker_thread.start()
+
+    def clear_queue(self):
+        self._exec_queue.queue.clear()
+
+    def _internal_cmd_handler(self, a, b):
+        if a == 0xDE:
+            self.clear_queue()
+            rospy.loginfo("Clearing packet queue")
 
     # Camera
 
@@ -190,6 +200,8 @@ class SerialProxy(object):
         # self.append_cmd(Opcodes.INTERNAL, self.START_BYTES)
 
     def append_cmd(self, opcode, data=[0, 0]):
+        if Opcodes.ANY in self.preprocessors:
+            data = self.preprocessors[Opcodes.ANY][0](data)
         self._msg_stack.extend(bytes([opcode] + list(data)))
 
     def send_cmd_packet(self):
@@ -252,12 +264,15 @@ class SerialProxy(object):
     def _process_io(self):
         self._pass_first_header = False
         while not rospy.is_shutdown() and self._run:
-            if self.is_robot:
-                self._process_input_robot()
-            else:
-                self._process_input_base()
+            try:
+                if self.is_robot:
+                    self._process_input_robot()
+                else:
+                    self._process_input_base()
 
-            self._process_output()
+                self._process_output()
+            except Exception as ex:
+                print(ex)
 
     def _process_output(self):
         if not self._output_packet_queue.empty():
@@ -267,7 +282,12 @@ class SerialProxy(object):
 
     def _process_input_robot(self):
         if self.port.inWaiting() >= 3:
-            self._exec_queue.put(bytes(self._read(3)))
+            d = bytes(self._read(3))
+            if Opcodes.ANY in self.preprocessors:
+                d = self.preprocessors[Opcodes.ANY][1](d)
+            if d[0] == Opcodes.INTERNAL:
+                return self._internal_cmd_handler(d[1], d[2])
+            self._exec_queue.put(d)
 
     def _process_input_base(self):
         if self.port.inWaiting() < 2:
@@ -278,7 +298,7 @@ class SerialProxy(object):
             return
         else:
             err_cnt += 1
-
+        print("!!!")
         self._pass_first_header = False
         nxt = self._read_byte()
         if nxt == SerialProxy.START_BYTES[0]:
@@ -300,7 +320,7 @@ class SerialProxy(object):
             return
 
         nonce, opcode, data, err = self.unpack(raw[:-1])
-        # print(opcode)
+        print(Opcodes(opcode))
         if opcode is None:
             if self._resend_req_mode:
                 self.send_packet(Opcodes.RESEND, nonce)
@@ -311,7 +331,14 @@ class SerialProxy(object):
 
         self._execute_msg(opcode, data)
 
+    def create_preproc(self, opcode, cb):
+        self.preprocessors[opcode] = cb
+
     def send_packet(self, opcode, data=[0, 0]):
+        data = utils.preprocess_types(data)
+        if opcode in self.preprocessors:
+            data = self.preprocessors[opcode][0](data)
+
         if not self.is_robot:
             if len(data) > 2:
                 rospy.logerr("Can't send long message to robot")
@@ -320,10 +347,10 @@ class SerialProxy(object):
             self.append_cmd(opcode, data)
             self.send_cmd_packet()
             return
-        if opcode in self.preprocessors:
-            data = self.preprocessors[opcode][0](data)
-        data = utils.preprocess_types(data)
-        # print(2, len(data))
+
+        if Opcodes.ANY in self.preprocessors:
+            data = self.preprocessors[Opcodes.ANY][0](data)
+
         raw = self.pack(opcode, data)
         self.sent_packets[self.nonce] = raw
         self._send(raw,
