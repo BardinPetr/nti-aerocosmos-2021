@@ -44,8 +44,11 @@ if len(sys.argv) > 1:
     # p.append_cmd(0xCC, [0, 0])
     p.send_cmd_packet()
     # p.send_packet(0xCC, [0xDE, 0xAD])
-    sleep(1)
+    sleep(2)
     p.send_packet(Opcodes.INTERNAL, [0xDE, 0xAD])
+    sleep(1)
+    p.send_packet(0xCD, [0, 0])
+
     # while True:
     #     p.request_image(1, 5)
     #     sleep(10)

@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import sys
 from threading import Thread
 
 from future import standard_library
@@ -160,6 +161,11 @@ class SerialProxy(object):
             # sys.exit(0)
             self.clear_queue()
             rospy.loginfo("Clearing packet queue")
+            sys.exit(0)
+            # self._worker_thread.kill()
+            # self._worker_thread = utils.KThread(target=lambda: self._execute_messages())
+            # self._worker_thread.daemon = True
+            # self._worker_thread.start()
             if self.post_kill_cb is not None:
                 self.post_kill_cb()
             self.init_port()
@@ -280,15 +286,15 @@ class SerialProxy(object):
     def _process_io(self):
         self._pass_first_header = False
         while not rospy.is_shutdown() and self._run:
-            try:
-                if self.is_robot:
-                    self._process_input_robot()
-                else:
+            if self.is_robot:
+                self._process_input_robot()
+            else:
+                try:
                     self._process_input_base()
+                except Exception as ex:
+                    print(ex)
 
-                self._process_output()
-            except Exception as ex:
-                print(ex)
+            self._process_output()
 
     def _process_output(self):
         if not self._output_packet_queue.empty():
