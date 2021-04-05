@@ -138,7 +138,7 @@ void calibrate_stepper() {
 void setup() {
     Serial.begin(9600);
     strip.begin();
-    strip.setBrightness(0);
+    strip.setBrightness(150);
     strip.show();
 
     nh.initNode();
@@ -172,9 +172,9 @@ void setup() {
     stepper.setAcceleration(200);
 
     memset(btn_data.data, 0, BTN_CNT);
-    uint32_t c = strip.Color(255, 0, 0);
-    for(uint16_t i = 0; i < strip.numPixels(); i++) strip.setPixelColor(i, c);
-    strip.show();
+    // uint32_t c = strip.Color(255, 0, 0);
+    // for(uint16_t i = 0; i < strip.numPixels(); i++) strip.setPixelColor(i, c);
+    // strip.show();
 
     // man_grip.write(0);
     // delay(1000);
@@ -199,6 +199,7 @@ void loop() {
     stepper.run();
     delay(5);
     if ((millis() - last_update) > 200) {
+        // Serial.println(analogRead(A0));
         for(int i = 0; i < BTN_CNT; i++) btn_data.data[i] = digitalRead(BTN_PINS[i]);
         pub_btn.publish(&btn_data);
 

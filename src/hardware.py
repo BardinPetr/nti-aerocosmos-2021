@@ -26,11 +26,11 @@ from tf.transformations import euler_from_quaternion
 
 
 class Hardware(object):
-    STEPPER_FULL_TURN = 1000
+    STEPPER_FULL_TURN = 2200
     cur_stepper_pos = 0
 
-    GRIPPER_OPENED = 0
-    GRIPPER_CLOSED = 90
+    GRIPPER_OPENED = 180
+    GRIPPER_CLOSED = 0
 
     BASE_SPD = 0.8
 
@@ -77,7 +77,7 @@ class Hardware(object):
         self._is_ok()
 
     def update_light(self, x):
-        self.light = x
+        self.light = x.data
 
     def update_sonar(self, x):
         self.sonar = x
@@ -124,22 +124,25 @@ class Hardware(object):
         self.vel.publish(t)
 
     def drive_dist(self, dst_cm):
+        t = time()
         dst = dst_cm / 100
         if self.odom is None:
             raise SystemError("Odom is not published yet")
         self.drive(self.BASE_SPD, 0)
+        print(dst)
         start = self.location()
-        while self.dist(start, self.location()) < dst:
+        while self.dist(start, self.location()) < dst and (time() - t) < 240:
             pass
         self.stop()
 
     def turn_angle(self, angle):
         if self.odom is None:
             raise SystemError("Odom is not published yet")
-        self.turn(self.BASE_SPD)
+        t = time()
+        self.turn(-self.BASE_SPD)
         start = self.orientation()[2]
         angle = radians(angle)
-        while abs(self.orientation()[2] - start) < angle:
+        while abs(self.orientation()[2] - start) < angle and (time() - t) < 60:
             # print(abs(self.orientation()[2] - start))
             sleep(0.005)
         self.stop()
@@ -154,13 +157,13 @@ class Hardware(object):
         self.cam_pos.publish(pitch, -1)
 
     def set_cam_yaw(self, yaw):
-        cur_stepper_pos = yaw / 360 * self.STEPPER_FULL_TURN
+        cur_stepper_pos = int(yaw / 360 * self.STEPPER_FULL_TURN)
         self.cam_pos.publish(-1, cur_stepper_pos)
 
     def add_cam_yaw(self, d, yaw):
-        self.set_cam_yaw(max(-350, min(350,
+        self.set_cam_yaw(int(max(-350, min(350,
                                        self.cur_stepper_pos +
-                                       (-1 if d == 0 else 1) * yaw / 360 * self.STEPPER_FULL_TURN)))
+                                       (-1 if d == 0 else 1) * yaw / 360 * self.STEPPER_FULL_TURN))))
 
     def set_gripper(self, grip=None, angle=None):
         if grip is not None:
@@ -175,19 +178,39 @@ class Hardware(object):
         self.man_yaw.publish(a)
 
     def default_man(self):
-        h.set_manipulator_arrow(40, 180)
+        self.set_manipulator_arrow(40, 180)
 
     def place_beacon(self, i):
+        print(i)
+        self.set_gripper(False)
+        sleep(0.5)
         arrow = [[60, 170], [70, 145], [75, 125], [75, 110]]
-        h.set_manipulator_arrow(*arrow[i])
+        self.set_manipulator_arrow(*arrow[i])
+        sleep(0.5)
+        self.set_gripper(True)
+        sleep(0.5)
+        self.set_manipulator_arrow(40, 150)#
+        sleep(0.5)
+        self.set_manipulator_yaw(70)
+        sleep(0.5)
+        self.set_manipulator_arrow(90, 50)
+        sleep(0.5)
+        self.set_gripper(False)
+        sleep(0.5)
+        self.set_manipulator_arrow(40, 150)#
+        sleep(0.5)
+        self.set_manipulator_yaw(150)
+        sleep(0.5)
+        self.default_man()
 
-    def auto_leave(self, thresh):
+
+    def auto_leave(self, thresh=120):
         while self.light < thresh:
             pass
 
         sleep(2)
-        self.drive(-0.4, 0)
-        sleep(6)
+        self.drive(0.3, 0)
+        sleep(5)
         self.drive(0, 0)
 
     def do_square(self, len, cb):
@@ -208,13 +231,21 @@ if __name__ == "__main__":
 
     sleep(0.2)
     # h.stop()
-    h.drive_dist(100)
+    # h.auto_leave()
+    # h.drive_dist(100)
     # h.set_manipulator_yaw(180)
-    print(1)
-    # h.set_gripper(angle=180)
+    # print(1)
+    # h.set_gripper(True)
     # sleep(2)
 
-    # h.set_manipulator_arrow(70, 255)
+    h.place_beacon(2)
+
+    # h.set_manipulator_arrow(40, 150)
+    # h.set_manipulator_yaw(70)
+    # sleep(1)
+
+    # h.set_manipulator_arrow(90, 50)
+
     while True:
         # h.man_grip.publish(int(input()))#h.set_gripper(angle=int(input()))
 

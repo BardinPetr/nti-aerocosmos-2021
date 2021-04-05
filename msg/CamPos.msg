@@ -1,2 +1,2 @@
-int8 pitch
-int8 yaw
+int16 pitch
+int16 yaw

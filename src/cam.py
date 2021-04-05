@@ -20,18 +20,20 @@ import cv2
 
 
 class Camera(object):
-    def __init__(self, cameras=None, size=(400, 300)):
+    def __init__(self, cameras=[], size=(400, 300)):
         self.reader_thread = {}
         self.camera = {}
         self.size = size
+        self.x=[]
         if cameras is None:
             i = 0
             while True:
                 self.camera[i] = cv2.VideoCapture(i)
                 if self.camera[i].read()[0]:
-                    self.reader_thread[i] = Thread(target=lambda: self.update_cam(i))
-                    self.reader_thread[i].daemon = True
-                    self.reader_thread[i].start()
+                    self.x.append(i)
+                    # self.reader_thread[i] = Thread(target=lambda: self.update_cam(i))
+                    # self.reader_thread[i].daemon = True
+                    # self.reader_thread[i].start()
                 else:
                     del self.camera[i]
                     if i > 20:
@@ -60,6 +62,18 @@ class Camera(object):
         return res.reshape(-1).tobytes()
 
     def get(self, i, quality=10, retry=10):
+        for k in [0, 1, 2, 3]:
+            try:
+                c = cv2.VideoCapture(k)
+                r, img = c.read()
+                if r:
+                    return  self.prepare(img)
+                c.release()
+            except:
+                pass
+
+
+        return None
         if len(self.camera) == 0:
             return None
         if i not in self.camera:
@@ -76,9 +90,10 @@ class Camera(object):
         return None
 
     def close(self):
-        for j, i in self.camera.items():
-            i.release()
-            self.reader_thread[j].terminate()
+        pass
+        # for j, i in self.camera.items():
+            # i.release()
+            # self.reader_thread[j].terminate()
 
 # c = Camera()
 #

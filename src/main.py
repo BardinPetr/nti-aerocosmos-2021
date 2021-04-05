@@ -36,7 +36,7 @@ p = SerialProxy(
     port_name=rospy.get_param('~modem_port',
                               '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0'),
     is_robot=True,
-    baud=rospy.get_param('~modem_baud', 115200),
+    baud=rospy.get_param('~modem_baud', 19200),
     started_cb=lambda: led(0, 0, 255),
     camera_controller=c
 )
@@ -84,7 +84,7 @@ p.subscribe_for_opcode(Opcodes.TURN_TARGET,
 p.subscribe_for_opcode(Opcodes.CIRCLE,
                        lambda x: d.circle(*x))
 p.subscribe_for_opcode(Opcodes.AUTO_LEAVE,
-                       lambda x: d.auto_leave(500))
+                       lambda x: d.auto_leave())
 
 p.subscribe_for_opcode(Opcodes.CAM_PITCH,
                        lambda x: d.set_cam_pitch(x[0]))

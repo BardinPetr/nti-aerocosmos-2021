@@ -1,3 +1,6 @@
+# #!/usr/bin/env python
+# # -*- coding: utf-8 -*-
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -19,7 +22,7 @@ from builtins import str
 
 import time
 from queue import Queue
-
+import os
 from nti_acs.srv import BridgeSend, BridgeRequestImage, BridgeSubscribeTopic
 from reedsolo import RSCodec, ReedSolomonError
 from serial import Serial
@@ -160,15 +163,26 @@ class SerialProxy(object):
         if a == 0xDE:
             # sys.exit(0)
             self.clear_queue()
+            print("Clearing packet queue")
             rospy.loginfo("Clearing packet queue")
-            sys.exit(0)
-            # self._worker_thread.kill()
-            # self._worker_thread = utils.KThread(target=lambda: self._execute_messages())
-            # self._worker_thread.daemon = True
-            # self._worker_thread.start()
+            # try:
+            #     self._worker_thread.kill()
+            # except:
+            #     pass
+
+            try:
+                self._worker_thread = Thread(target=lambda: self._execute_messages())
+                self._worker_thread.daemon = True
+                self._worker_thread.start()
+            except:
+                pass
+
             if self.post_kill_cb is not None:
                 self.post_kill_cb()
             self.init_port()
+        elif a == 0xDD:
+            print("Restarting self")
+            os.execv(sys.argv[0], sys.argv)
 
     # Camera
 
@@ -182,8 +196,8 @@ class SerialProxy(object):
             return
         rospy.loginfo("Sending image from cam")
         img = self._camera_controller.get(data[0], data[1])
-        open(time.ctime() + '.jpg', 'wb').write(img)
         if img is not None:
+            open(time.ctime() + '.jpg', 'wb').write(img)
             self.send_image(img)
         elif retry > 0:
             self.send_image_from_cam(data, retry - 1)

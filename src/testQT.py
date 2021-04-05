@@ -5,7 +5,6 @@ import signal
 import sys
 from time import sleep
 
-# p.subscribe_for_opcode(0x44, lambda x: p.send_packet(0x99, 0x23))
 #from opcodes import Opcodes
 #from protocol import SerialProxy
 #from utils import to_2b
@@ -17,6 +16,8 @@ from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QVBoxLayout
 from PyQt5.QtCore import Qt, QRect
+
+from protocol import SerialProxy
 
 
 class ImageScroller(QtWidgets.QWidget):
@@ -32,8 +33,7 @@ class ImageScroller(QtWidgets.QWidget):
         self.sm = 0
         self.clearCheck = False
 
-        #self.p = SerialProxy("/dev/pts/21", 115200)
-        #self.p.begin_cmd_packet()
+        self.p = SerialProxy("/dev/ttyUSB1", 115200)
 
         QtWidgets.QWidget.__init__(self)
         self._image = QtGui.QPixmap("D:/IT-квантум_Кванториум63/qtNTI/main.png")
@@ -112,7 +112,7 @@ class ImageScroller(QtWidgets.QWidget):
 
     def SendBtn(self):
         if len(self.qle.text()) > 0:
-            data = float(self.qle.text()) #текст из поля для ввода
+            data = int(self.qle.text()) #текст из поля для ввода
             opcodeText = self.combo.currentText() #выбранный элемент в списке
             textToHex = {"INTERNAL": "0x00", "WAIT": "0x07",
                          "DRIVE": "0xA0", "DRIVE_TARGET": "0xA1", "TURN_TARGET": "0xA2", "TURN_TILL": "0xA3", "CIRCLE": "0xA4", "ANTI_COLLIDE": "0xA5", "AUTO_LEAVE": '0xA6',
